@@ -1,0 +1,881 @@
+[
+  {
+    "pattern_id": "PAT_HIGH_LATENCY_B14A87",
+    "pattern_name": "HIGH_LATENCY_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "access_switch",
+        "firewall",
+        "router",
+        "dist_switch"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "SW2",
+          "role": "dist_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.023271337589231337,
+        "absolute_range": {
+          "min": 19.879402809219226,
+          "max": 32.459565583033786
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "packet_loss",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.0824299670128123,
+        "absolute_range": {
+          "min": 0.2820589432864608,
+          "max": 0.8242309850185427
+        },
+        "lag_minutes": 35.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 35.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "HIGH_LATENCY",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 241,
+      "confidence": 0.739,
+      "lift": 2.951,
+      "avg_lag_minutes": [
+        0.0,
+        0.0,
+        35.0,
+        35.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.261
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  },
+  {
+    "pattern_id": "PAT_HIGH_LATENCY_E18875",
+    "pattern_name": "HIGH_LATENCY_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "firewall",
+        "dist_switch",
+        "access_switch",
+        "router"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "SW2",
+          "role": "dist_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.023271337589231337,
+        "absolute_range": {
+          "min": 19.879402809219226,
+          "max": 32.459565583033786
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "packet_loss",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.0824299670128123,
+        "absolute_range": {
+          "min": 0.2820589432864608,
+          "max": 0.8242309850185427
+        },
+        "lag_minutes": 35.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 6,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 35.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "HIGH_LATENCY",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 241,
+      "confidence": 0.739,
+      "lift": 2.951,
+      "avg_lag_minutes": [
+        0.0,
+        0.0,
+        0.0,
+        35.0,
+        35.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.261
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  },
+  {
+    "pattern_id": "PAT_HIGH_LATENCY_E58663",
+    "pattern_name": "HIGH_LATENCY_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "firewall",
+        "dist_switch",
+        "access_switch",
+        "router"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "packet_loss",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.0008924112614196296,
+        "absolute_range": {
+          "min": 0.2820589432864608,
+          "max": 0.8242309850185427
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "SW2",
+          "role": "dist_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.023271337589231337,
+        "absolute_range": {
+          "min": 19.879402809219226,
+          "max": 32.459565583033786
+        },
+        "lag_minutes": 25.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 6,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 35.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "HIGH_LATENCY",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 241,
+      "confidence": 0.739,
+      "lift": 2.951,
+      "avg_lag_minutes": [
+        0.0,
+        0.0,
+        0.0,
+        25.0,
+        35.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.261
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  },
+  {
+    "pattern_id": "PAT_INTERFACE_FLAP_FD128F",
+    "pattern_name": "INTERFACE_FLAP_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "firewall",
+        "access_switch",
+        "router"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "packet_loss",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.0008924112614196296,
+        "absolute_range": {
+          "min": 0.2820589432864608,
+          "max": 0.8242309850185427
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.025010133418778994,
+        "absolute_range": {
+          "min": 23.775853356337063,
+          "max": 37.193854762920836
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "link_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.035671796840334564,
+        "absolute_range": {
+          "min": 36.55755413057426,
+          "max": 54.90768350690198
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 6,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "packet_loss",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.03645251411194267,
+        "absolute_range": {
+          "min": 0.10190034044722057,
+          "max": 0.33079598247721803
+        },
+        "lag_minutes": 25.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "INTERFACE_FLAP",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 116,
+      "confidence": 0.681,
+      "lift": 2.721,
+      "avg_lag_minutes": [
+        0.0,
+        10.0,
+        10.0,
+        10.0,
+        25.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.319
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  },
+  {
+    "pattern_id": "PAT_INTERFACE_FLAP_69BD97",
+    "pattern_name": "INTERFACE_FLAP_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "firewall",
+        "access_switch",
+        "router"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "FW1",
+          "role": "firewall"
+        },
+        "metric": "latency_ms",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.012948496093519229,
+        "absolute_range": {
+          "min": 8.864452617747135,
+          "max": 17.158181958501764
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.025010133418778994,
+        "absolute_range": {
+          "min": 23.775853356337063,
+          "max": 37.193854762920836
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "link_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.035671796840334564,
+        "absolute_range": {
+          "min": 36.55755413057426,
+          "max": 54.90768350690198
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 6,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "packet_loss",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.03645251411194267,
+        "absolute_range": {
+          "min": 0.10190034044722057,
+          "max": 0.33079598247721803
+        },
+        "lag_minutes": 25.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "INTERFACE_FLAP",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 117,
+      "confidence": 0.675,
+      "lift": 2.698,
+      "avg_lag_minutes": [
+        0.0,
+        10.0,
+        10.0,
+        10.0,
+        25.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.325
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  },
+  {
+    "pattern_id": "PAT_INTERFACE_FLAP_A1113E",
+    "pattern_name": "INTERFACE_FLAP_causal_chain",
+    "pattern_type": "metric_sequence_event",
+    "topology_scope": {
+      "applicable_roles": [
+        "access_switch",
+        "router",
+        "dist_switch"
+      ],
+      "max_hops": 3,
+      "path_required": false
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "node": {
+          "device": "SW2",
+          "role": "dist_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.023271337589231337,
+        "absolute_range": {
+          "min": 19.879402809219226,
+          "max": 32.459565583033786
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 1.0
+      },
+      {
+        "step": 2,
+        "node": {
+          "device": "R1",
+          "role": "router"
+        },
+        "metric": "cpu_pct",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.021872605570732742,
+        "absolute_range": {
+          "min": 29.542574926807855,
+          "max": 41.847017030517215
+        },
+        "lag_minutes": 0.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 3,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "crc_errors",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.4121194681503648,
+        "absolute_range": {
+          "min": 0.9831900780282552,
+          "max": 16.00824831613652
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 4,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "buffer_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.025010133418778994,
+        "absolute_range": {
+          "min": 23.775853356337063,
+          "max": 37.193854762920836
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 5,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "link_util",
+        "feature": "slope",
+        "direction": "up",
+        "threshold": 0.035671796840334564,
+        "absolute_range": {
+          "min": 36.55755413057426,
+          "max": 54.90768350690198
+        },
+        "lag_minutes": 10.0,
+        "tolerance_minutes": 2.0
+      },
+      {
+        "step": 6,
+        "node": {
+          "device": "SW1",
+          "role": "access_switch"
+        },
+        "metric": "packet_loss",
+        "feature": "delta",
+        "direction": "up",
+        "threshold": 0.03645251411194267,
+        "absolute_range": {
+          "min": 0.10190034044722057,
+          "max": 0.33079598247721803
+        },
+        "lag_minutes": 25.0,
+        "tolerance_minutes": 2.0
+      }
+    ],
+    "result_event": {
+      "name": "INTERFACE_FLAP",
+      "severity": "critical"
+    },
+    "stats": {
+      "support": 123,
+      "confidence": 0.667,
+      "lift": 2.664,
+      "avg_lag_minutes": [
+        0.0,
+        10.0,
+        10.0,
+        10.0,
+        25.0
+      ]
+    },
+    "validation": {
+      "method": [
+        "cross_correlation",
+        "granger_causality",
+        "sequence_mining"
+      ],
+      "min_occurrences": 10,
+      "false_positive_rate": 0.333
+    },
+    "lifecycle": {
+      "first_seen": "2026-03-24",
+      "last_updated": "2026-03-24",
+      "drift_score": 0.0,
+      "status": "active"
+    }
+  }
+]

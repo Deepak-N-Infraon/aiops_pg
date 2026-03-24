@@ -151,7 +151,7 @@ class PatternDiscovery:
         self,
         topo:           TopologyLoader,
         min_support:    float = 0.10,
-        min_confidence: float = 0.70,
+        min_confidence: float = 0.55,
         min_lift:       float = 1.20,
         max_hops:       int   = 2,
         max_lag_min:    float = 30.0,
@@ -175,47 +175,20 @@ class PatternDiscovery:
         resample_min: int = 5,
     ) -> Dict[Tuple[str, str], pd.Series]:
         """
-        Build one time series per (device, metric).
-
-        Auto-detects the actual data frequency from the DataFrame instead
-        of blindly resampling to resample_min — this avoids creating
-        artificially-repeated values when the loader has already sub-sampled
-        (e.g. SAMPLE_EVERY=3 gives 15-min intervals, not 5-min).
-
-        Applies first-differencing so cross-correlation captures short-term
-        causal changes rather than long-term diurnal trends.
+        Resample raw data to fixed frequency and return one Series per
+        (device, metric).  Missing intervals are forward-filled (max 2 steps).
         """
         df = df.copy()
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp")
 
-        # ── Detect actual median poll interval from the data ──────────────
-        all_ts = df["timestamp"].drop_duplicates().sort_values()
-        if len(all_ts) > 1:
-            deltas      = all_ts.diff().dropna()
-            median_secs = deltas.dt.total_seconds().median()
-            actual_min  = max(1, int(round(median_secs / 60)))
-        else:
-            actual_min = resample_min
-        freq = f"{actual_min}min"
-
         series_dict: Dict[Tuple[str, str], pd.Series] = {}
+        freq = f"{resample_min}min"
         for (dev, met), grp in df.groupby(["device", "metric"]):
             s = (grp.set_index("timestamp")["value"]
                     .resample(freq).mean()
-                    .ffill(limit=3)
-                    .dropna())
-
-            # First-difference: removes slow diurnal trends, keeps
-            # short-term causal changes visible to cross-correlation
-            s_diff = s.diff().dropna()
-
-            if len(s_diff) >= 10:
-                series_dict[(dev, met)] = s_diff
-            elif len(s) >= 10:
-                # Fall back to raw series if diff leaves too few points
-                series_dict[(dev, met)] = s
-
+                    .ffill(limit=2))
+            series_dict[(dev, met)] = s
         return series_dict
 
     # ── Step 2: cross-correlation + best lag ─────────────────────────────
@@ -231,31 +204,25 @@ class PatternDiscovery:
         Returns (best_lag_steps, best_r).
         Positive lag means sb follows sa by `lag` steps.
         """
+        # Align on common index
         common = sa.index.intersection(sb.index)
-        if len(common) < 20:
+        if len(common) < 10:
             return 0, 0.0
 
         a = sa.loc[common].values.astype(float)
         b = sb.loc[common].values.astype(float)
-
-        # Drop positions where either series is NaN
-        mask  = np.isfinite(a) & np.isfinite(b)
-        a, b  = a[mask], b[mask]
-        if len(a) < 20:
-            return 0, 0.0
 
         # Standardise
         a_std = (a - a.mean()) / (a.std() + 1e-9)
         b_std = (b - b.mean()) / (b.std() + 1e-9)
 
         best_r, best_lag = 0.0, 0
-        n = len(a_std)
-        for lag in range(0, min(max_lag_steps + 1, n // 3)):
+        for lag in range(0, max_lag_steps + 1):
             if lag == 0:
                 r = float(np.corrcoef(a_std, b_std)[0, 1])
             else:
                 r = float(np.corrcoef(a_std[:-lag], b_std[lag:])[0, 1])
-            if np.isfinite(r) and abs(r) > abs(best_r):
+            if abs(r) > abs(best_r):
                 best_r, best_lag = r, lag
         return best_lag, best_r
 
@@ -331,16 +298,15 @@ class PatternDiscovery:
         """
         For every topology-valid (dev_a, dev_b) pair within max_hops,
         test every metric pair for causal relationship.
-
-        Includes same-device pairs (dev_a == dev_b) so intra-device
-        causality (e.g. cpu_pct → rx_errors on the same router) is tested.
-        Same-device, same-metric pairs are skipped (trivially correlated).
         """
         metrics = list({m for _, m in series_dict.keys()})
         max_lag_steps = int(self.max_lag_min / resample_min)
         links: List[CausalLink] = []
 
         valid_pairs = self.topo.all_pairs_within(self.max_hops)
+        # Also include same-device pairs for intra-device causal patterns
+        for dev in self.topo.devices:
+            valid_pairs.append((dev, dev))
         if self.verbose:
             print(f"\n[PatternDiscovery] Testing {len(valid_pairs)} device pairs, "
                   f"{len(metrics)} metrics each → "
@@ -353,9 +319,8 @@ class PatternDiscovery:
                 if sa is None:
                     continue
                 for met_b in metrics:
-                    # Skip same-device same-metric (trivially r=1, not useful)
                     if dev_a == dev_b and met_a == met_b:
-                        continue
+                        continue  # skip self-correlation
                     sb = series_dict.get((dev_b, met_b))
                     if sb is None:
                         continue
@@ -461,18 +426,24 @@ class PatternDiscovery:
                     fired = False
                     break
                 # The "cause" metric must be trending up (for this demo, slope > 0)
-                if fa.slope <= 0 or fb.slope <= 0:
+                if fa.slope <= 0:
                     fired = False
                     break
                 # The effect must correlate directionally
-                if lk.correlation < 0 and not (fa.slope > 0 and fb.slope < 0):
+                if lk.correlation > 0 and fb.slope <= 0:
+                    fired = False
+                    break
+                if lk.correlation < 0 and fb.slope >= 0:
                     fired = False
                     break
             if fired:
                 support_count += 1
-                # Check event within next 3 windows
-                future_idx = min(i + 3, len(event_windows) - 1)
-                if event_windows[future_idx]:
+                # Check event within ANY of the next 1-3 windows
+                future_hit = any(
+                    event_windows[j]
+                    for j in range(i, min(i + 4, len(event_windows)))
+                )
+                if future_hit:
                     true_positives += 1
 
         if support_count == 0:
@@ -593,17 +564,14 @@ class PatternDiscovery:
         series_dict = self._build_series(df, resample_min)
         print(f"      {len(series_dict)} (device,metric) series")
 
-        # Step 2: discover causal links — relax min_corr gradually if needed
+        # Step 2: discover causal links
         print("\n[2/5] Cross-correlation + Granger causality...")
         links = self.discover_links(series_dict, resample_min)
 
         if not links:
-            for relaxed in [0.25, 0.20, 0.15]:
-                print(f"  ✗ No causal links found. Relaxing min_corr to {relaxed}...")
-                self.min_corr = relaxed
-                links = self.discover_links(series_dict, resample_min)
-                if links:
-                    break
+            print("  ✗ No causal links found. Relaxing min_corr to 0.30...")
+            self.min_corr = 0.30
+            links = self.discover_links(series_dict, resample_min)
 
         # Print top links
         print(f"\n  Top causal links discovered:")
@@ -644,7 +612,7 @@ class PatternDiscovery:
             # Step 4: build and validate sequences
             print(f"\n[4/5] Building causal chains toward {t_dev}:{t_met}...")
             chains = self._build_sequences(
-                [lk for lk in links if lk.dev_b == t_dev or lk.metric_b == t_met],
+                links,
                 target_metric = t_met,
                 target_device = t_dev,
             )
