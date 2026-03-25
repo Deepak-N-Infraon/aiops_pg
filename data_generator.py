@@ -2,31 +2,33 @@
 data_generator.py
 =================
 Generates a synthetic but realistic multi-device network time-series dataset
-with EMBEDDED causal patterns, scaled to 100 devices over 30 days.
+with EMBEDDED causal patterns.
 
-Topology design (100 devices):
-  ─ 2 Core Routers         (R1, R2)
-  ─ 4 Distribution Switches (DS1..DS4)
-  ─ 8 Firewall/IDS nodes   (FW1..FW8)
-  ─ 16 Access Switches     (SW1..SW16)
-  ─ 70 Edge Switches       (Edge1..Edge70)
+Scale is controlled entirely by config.py:
+    N_DEVICES  → number of network devices  (5 – 200)
+    N_DAYS     → days of historical data    (1 – 365)
 
-Each FW is a "target" device for HIGH_LATENCY.
-Each SW  is a "target" device for INTERFACE_FLAP.
+Topology is built dynamically to fit N_DEVICES into a realistic hierarchy:
 
-Injected causal chains (same logic as original, replicated per group):
+  Tier          Role             Ratio (approx)
+  ────────────────────────────────────────────────
+  1  Core       router           1 per 50 devices
+  2  Agg        dist_switch      1 per 12 devices
+  3  Security   firewall         1 per  6 devices
+  4  Access     access_switch    1 per  3 devices
+  5  Edge       edge_switch      remainder
 
-  HIGH_LATENCY pattern (per router→SW→DS→FW group):
-    R:cpu_pct ↑ → SW:crc_errors ↑ → DS:buffer_util ↑
+  Minimum topology (N_DEVICES=5):
+    R1 → DS1 → FW1 → SW1 → Edge1
+
+Injected causal chains (replicated per group):
+
+  HIGH_LATENCY:
+    R:cpu_pct ↑ → DS:buffer_util ↑ / crc_errors ↑
       → FW:latency_ms ↑ → FW:packet_loss ↑
 
-  INTERFACE_FLAP pattern (per SW):
+  INTERFACE_FLAP:
     SW:link_util ↑ → SW:buffer_util ↑ → SW:crc_errors ↑ → SW:packet_loss ↑
-
-Optimisation notes for 100-device / 30-day scale:
-  - Numpy vectorised operations throughout (no Python loops over rows)
-  - Final DataFrame built from pre-allocated arrays and a single pd.concat
-  - Memory-efficient: float32 values
 """
 
 from __future__ import annotations
@@ -35,79 +37,9 @@ import pandas as pd
 from typing import List, Dict, Tuple
 
 
-# ── Topology definition ───────────────────────────────────────────────────────
+# ── Metric specs per role ─────────────────────────────────────────────────────
 
-def get_topology() -> dict:
-    nodes = []
-    edges = []
-
-    # Core routers
-    for i in range(1, 3):
-        nodes.append({"id": f"R{i}", "role": "router"})
-
-    # Distribution switches (2 per router)
-    for i in range(1, 5):
-        nodes.append({"id": f"DS{i}", "role": "dist_switch"})
-
-    # Firewalls (2 per DS)
-    for i in range(1, 9):
-        nodes.append({"id": f"FW{i}", "role": "firewall"})
-
-    # Access switches (2 per FW)
-    for i in range(1, 17):
-        nodes.append({"id": f"SW{i}", "role": "access_switch"})
-
-    # Edge switches (split evenly under each SW, ~4-5 per SW)
-    edge_id = 1
-    for sw_i in range(1, 17):
-        count = 5 if sw_i <= 6 else 4
-        for _ in range(count):
-            nodes.append({"id": f"Edge{edge_id}", "role": "edge_switch"})
-            edge_id += 1
-
-    # Edges: R1 → DS1,DS2  |  R2 → DS3,DS4
-    edges += [["R1", "DS1"], ["R1", "DS2"], ["R2", "DS3"], ["R2", "DS4"]]
-    # DS → FW  (2 FW per DS)
-    fw_map = {1: [1, 2], 2: [3, 4], 3: [5, 6], 4: [7, 8]}
-    for ds_i, fws in fw_map.items():
-        for fw in fws:
-            edges.append([f"DS{ds_i}", f"FW{fw}"])
-    # FW → SW  (2 SW per FW)
-    sw_per_fw = {1: [1, 2], 2: [3, 4], 3: [5, 6], 4: [7, 8],
-                 5: [9, 10], 6: [11, 12], 7: [13, 14], 8: [15, 16]}
-    for fw_i, sws in sw_per_fw.items():
-        for sw in sws:
-            edges.append([f"FW{fw_i}", f"SW{sw}"])
-    # SW → Edge
-    edge_id = 1
-    for sw_i in range(1, 17):
-        count = 5 if sw_i <= 6 else 4
-        for _ in range(count):
-            edges.append([f"SW{sw_i}", f"Edge{edge_id}"])
-            edge_id += 1
-
-    return {"nodes": nodes, "edges": edges}
-
-
-def get_target_events() -> list:
-    """
-    Return one HIGH_LATENCY target per FW and one INTERFACE_FLAP per SW.
-    For discovery we return representative ones (FW1, SW1) to avoid
-    an explosion of target scans; the injected patterns on all groups
-    mean the discovered chain generalises.
-    """
-    return [
-        {"device": "FW1", "metric": "latency_ms",
-         "event": "HIGH_LATENCY",   "severity": "critical"},
-        {"device": "SW1", "metric": "packet_loss",
-         "event": "INTERFACE_FLAP", "severity": "critical"},
-    ]
-
-
-# ── Dataset generation ────────────────────────────────────────────────────────
-
-# Metric specs: (mean, std, lo, hi)
-_METRIC_SPECS = {
+_METRIC_SPECS: Dict[str, Dict[str, Tuple]] = {
     "router": {
         "cpu_pct":    (35, 5,   5,  95),
         "latency_ms": ( 8, 2,   1, 200),
@@ -138,123 +70,239 @@ _METRIC_SPECS = {
     },
 }
 
-# Router ↔ FW group mappings for HIGH_LATENCY injection
-# R1 feeds DS1/DS2 → FW1..FW4 → SW1..SW8
-# R2 feeds DS3/DS4 → FW5..FW8 → SW9..SW16
-_HL_GROUPS = [
-    # (router, [ds_list], [fw_list])
-    ("R1", ["DS1", "DS2"], ["FW1", "FW2", "FW3", "FW4"]),
-    ("R2", ["DS3", "DS4"], ["FW5", "FW6", "FW7", "FW8"]),
-]
 
-# SW list for INTERFACE_FLAP
-_SW_LIST = [f"SW{i}" for i in range(1, 17)]
+# ════════════════════════════════════════════════════════════════════════════
+# Dynamic topology builder
+# ════════════════════════════════════════════════════════════════════════════
 
+def _tier_counts(n_devices: int) -> Dict[str, int]:
+    """
+    Distribute n_devices across 5 tiers.
+    Guarantees at least 1 device per tier (except edge_switch).
+    """
+    n_router = max(1, n_devices // 50)
+    n_ds     = max(1, n_devices // 12)
+    n_fw     = max(1, n_devices //  6)
+    n_sw     = max(1, n_devices //  3)
+    n_edge   = max(0, n_devices - n_router - n_ds - n_fw - n_sw)
+
+    # Trim if we overshot (can happen for very small N)
+    total  = n_router + n_ds + n_fw + n_sw + n_edge
+    excess = total - n_devices
+    if excess > 0:
+        n_edge = max(0, n_edge - excess); excess -= max(0, n_edge)
+        n_sw   = max(1, n_sw   - excess)
+
+    return {
+        "router":        n_router,
+        "dist_switch":   n_ds,
+        "firewall":      n_fw,
+        "access_switch": n_sw,
+        "edge_switch":   n_edge,
+    }
+
+
+def build_topology(n_devices: int) -> dict:
+    """
+    Build a realistic hierarchical topology for n_devices devices.
+    Returns {"nodes": [...], "edges": [...]}.
+    """
+    counts  = _tier_counts(n_devices)
+    nodes:  List[dict] = []
+    edges:  List[list] = []
+
+    routers  = [f"R{i+1}"    for i in range(counts["router"])]
+    dses     = [f"DS{i+1}"   for i in range(counts["dist_switch"])]
+    fws      = [f"FW{i+1}"   for i in range(counts["firewall"])]
+    sws      = [f"SW{i+1}"   for i in range(counts["access_switch"])]
+    edge_dev = [f"Edge{i+1}" for i in range(counts["edge_switch"])]
+
+    for d in routers:  nodes.append({"id": d, "role": "router"})
+    for d in dses:     nodes.append({"id": d, "role": "dist_switch"})
+    for d in fws:      nodes.append({"id": d, "role": "firewall"})
+    for d in sws:      nodes.append({"id": d, "role": "access_switch"})
+    for d in edge_dev: nodes.append({"id": d, "role": "edge_switch"})
+
+    def _wire(parents: List[str], children: List[str]) -> None:
+        """Round-robin: connect each child to a parent."""
+        if not parents or not children:
+            return
+        for i, child in enumerate(children):
+            edges.append([parents[i % len(parents)], child])
+
+    _wire(routers,  dses)
+    _wire(dses,     fws)
+    _wire(fws,      sws)
+    _wire(sws,      edge_dev)
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def get_topology(n_devices: int = None) -> dict:
+    """
+    Return topology dict for n_devices.
+    Falls back to config.N_DEVICES, then to 5.
+    """
+    if n_devices is None:
+        try:
+            from config import N_DEVICES
+            n_devices = N_DEVICES
+        except ImportError:
+            n_devices = 5
+    return build_topology(n_devices)
+
+
+def get_target_events(topo: dict = None, n_devices: int = None) -> list:
+    """
+    Return representative target events guaranteed to exist in the topology.
+    Uses the first firewall for HIGH_LATENCY and first access_switch for
+    INTERFACE_FLAP.
+    """
+    if topo is None:
+        topo = get_topology(n_devices)
+    role_map   = {n["id"]: n["role"] for n in topo["nodes"]}
+    fw_devices = [d for d, r in role_map.items() if r == "firewall"]
+    sw_devices = [d for d, r in role_map.items() if r == "access_switch"]
+
+    events = []
+    if fw_devices:
+        events.append({"device": fw_devices[0], "metric": "latency_ms",
+                        "event": "HIGH_LATENCY",   "severity": "critical"})
+    if sw_devices:
+        events.append({"device": sw_devices[0], "metric": "packet_loss",
+                        "event": "INTERFACE_FLAP", "severity": "critical"})
+    return events
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Dataset generation
+# ════════════════════════════════════════════════════════════════════════════
 
 def generate_dataset(
-    n_days:      int = 30,
-    freq_min:    int = 5,
-    n_events_hl: int = 20,    # per group
-    n_events_if: int = 15,    # per SW
-    seed:        int = 42,
+    n_days:      int = None,
+    freq_min:    int = None,
+    n_events_hl: int = None,
+    n_events_if: int = None,
+    seed:        int = None,
+    n_devices:   int = None,
 ) -> pd.DataFrame:
     """
     Returns a long-format DataFrame:
-        timestamp | device | metric | value   (value as float32)
+        timestamp | device | metric | value  (float32)
 
-    All numpy operations are vectorised; no Python loops over rows.
+    All parameters default to config.py values when not explicitly supplied.
     """
-    rng = np.random.default_rng(seed)
+    # ── Resolve config ────────────────────────────────────────────────────
+    try:
+        from config import get_config
+        cfg = get_config()
+    except ImportError:
+        cfg = {}
 
+    n_devices   = n_devices   if n_devices   is not None else cfg.get("n_devices",   5)
+    n_days      = n_days      if n_days      is not None else cfg.get("n_days",      90)
+    freq_min    = freq_min    if freq_min    is not None else cfg.get("poll_freq_min", 5)
+    n_events_hl = n_events_hl if n_events_hl is not None else cfg.get("n_events_high_latency", 8)
+    n_events_if = n_events_if if n_events_if is not None else cfg.get("n_events_iface_flap",   5)
+    seed        = seed        if seed        is not None else cfg.get("seed", 42)
+
+    rng     = np.random.default_rng(seed)
     n_steps = int(n_days * 24 * 60 / freq_min)
-    ts = pd.date_range("2026-01-01", periods=n_steps, freq=f"{freq_min}min")
+    ts      = pd.date_range("2026-01-01", periods=n_steps, freq=f"{freq_min}min")
 
-    topo = get_topology()
-    role_map: Dict[str, str] = {n["id"]: n["role"] for n in topo["nodes"]}
+    # ── Build topology ────────────────────────────────────────────────────
+    topo     = build_topology(n_devices)
+    role_map = {n["id"]: n["role"] for n in topo["nodes"]}
+    by_role: Dict[str, List[str]] = {}
+    for dev, role in role_map.items():
+        by_role.setdefault(role, []).append(dev)
 
-    # Diurnal envelope (reused for all series)
-    diurnal_base = np.sin(2 * np.pi * np.arange(n_steps) / (24 * 60 / freq_min))
+    routers   = by_role.get("router",        [])
+    dses      = by_role.get("dist_switch",   [])
+    fws       = by_role.get("firewall",      [])
+    sws       = by_role.get("access_switch", [])
 
-    # ── Build baseline series ─────────────────────────────────────────────
+    # Build quick edge lookup
+    edge_set = set()
+    for a, b in topo["edges"]:
+        edge_set.add((a, b))
+        edge_set.add((b, a))
+
+    # ── Diurnal envelope ──────────────────────────────────────────────────
+    diurnal_base = np.sin(
+        2 * np.pi * np.arange(n_steps) / (24 * 60 / freq_min)
+    )
+
+    # ── Baseline series ───────────────────────────────────────────────────
     base_series: Dict[Tuple[str, str], np.ndarray] = {}
-
-    for node in topo["nodes"]:
-        dev  = node["id"]
-        role = node["role"]
+    for dev, role in role_map.items():
         for met, (mu, sd, lo, hi) in _METRIC_SPECS.get(role, {}).items():
-            diurnal = diurnal_base * (sd * 0.4)          # ±40% of std as diurnal
-            s = mu + diurnal + rng.normal(0, sd, n_steps)
+            s = mu + diurnal_base * (sd * 0.4) + rng.normal(0, sd, n_steps)
             base_series[(dev, met)] = np.clip(s, lo, hi)
 
-    # ── Inject HIGH_LATENCY causal episodes ──────────────────────────────
-    # Pattern: R:cpu↑ → DS:buffer↑ → FW:latency↑ → FW:packet_loss↑
-    # (also touches SW:crc_errors to preserve original chain visibility)
-    for router, ds_list, fw_list in _HL_GROUPS:
-        for _ in range(n_events_hl):
-            start    = int(rng.integers(100, n_steps - 120))
-            duration = int(rng.integers(18, 42))
-            ramp     = np.linspace(0, 1, duration // 2)
-            wave     = np.concatenate([ramp, np.ones(duration - len(ramp))])
+    # ── Injection helpers ─────────────────────────────────────────────────
+    def _make_wave(duration: int) -> np.ndarray:
+        ramp = np.linspace(0, 1, max(1, duration // 2))
+        return np.concatenate([ramp, np.ones(duration - len(ramp))])
 
-            l0 = 0
-            l1 = int(rng.integers(2, 5))
-            l2 = l1 + int(rng.integers(2, 4))
-            l3 = l2 + int(rng.integers(2, 4))
-            l4 = l3 + int(rng.integers(1, 3))
+    def _inj(key, start: int, wave: np.ndarray, amp: float, clip_hi: float):
+        if key not in base_series:
+            return
+        s   = base_series[key]
+        i1  = min(start + len(wave), n_steps)
+        w   = wave[:i1 - start]
+        if len(w) == 0:
+            return
+        s[start:i1] = np.clip(s[start:i1] + amp * w, 0, clip_hi)
 
-            def _inj(key, offset, amp, hi):
-                if key not in base_series:
-                    return
-                s  = base_series[key]
-                i0 = min(start + offset, n_steps - 1)
-                i1 = min(i0 + duration, n_steps)
-                w  = wave[:i1 - i0]
-                s[i0:i1] = np.clip(s[i0:i1] + amp * w, 0, hi)
+    # ── HIGH_LATENCY injection (per router group) ─────────────────────────
+    if routers and fws:
+        for router in routers:
+            # Find DS children of this router
+            r_dses = [d for d in dses if (router, d) in edge_set] or dses
+            # Find FW grandchildren (DS → FW)
+            r_fws  = [f for f in fws if any((d, f) in edge_set for d in r_dses)] or fws
 
-            # Root cause: router cpu
-            _inj((router, "cpu_pct"), l0, 40, 98)
+            safe_end = max(n_steps - 120, 100)
+            if safe_end <= 100:
+                break
+            for _ in range(n_events_hl):
+                start    = int(rng.integers(100, safe_end))
+                duration = int(rng.integers(18, min(42, n_steps - start - 5)))
+                wave     = _make_wave(duration)
 
-            # Propagate to a random DS in the group
-            ds = ds_list[int(rng.integers(0, len(ds_list)))]
-            _inj((ds, "buffer_util"), l1, 50, 98)
-            _inj((ds, "crc_errors"), l1, 60, 500)
+                l0 = 0
+                l1 = int(rng.integers(2, 5))
+                l2 = l1 + int(rng.integers(2, 4))
+                l3 = l2 + int(rng.integers(2, 4))
+                l4 = l3 + int(rng.integers(1, 3))
 
-            # Propagate to all FWs in the group (stronger signal for discovery)
-            for fw in fw_list:
-                _inj((fw, "latency_ms"),  l3, 200, 500)
-                _inj((fw, "packet_loss"), l4,   8,  20)
+                _inj((router, "cpu_pct"),    start + l0, wave, 40, 98)
+                ds = r_dses[int(rng.integers(0, len(r_dses)))]
+                _inj((ds, "buffer_util"),    start + l1, wave, 50, 98)
+                _inj((ds, "crc_errors"),     start + l1, wave, 60, 500)
+                for fw in r_fws:
+                    _inj((fw, "latency_ms"),  start + l3, wave, 200, 500)
+                    _inj((fw, "packet_loss"), start + l4, wave,   8,  20)
+                if sws:
+                    sw = sws[int(rng.integers(0, len(sws)))]
+                    _inj((sw, "crc_errors"),  start + l2, wave, 120, 500)
 
-            # Also inject on a random SW for cross-device chain
-            sw_candidates = [f"SW{i}" for i in range(1, 17)
-                             if (i - 1) // 2 in range(len(fw_list))]
-            if sw_candidates:
-                sw = sw_candidates[int(rng.integers(0, len(sw_candidates)))]
-                _inj((sw, "crc_errors"), l2, 120, 500)
-
-    # ── Inject INTERFACE_FLAP causal episodes ─────────────────────────────
-    # Pattern: SW:link_util↑ → SW:buffer_util↑ → SW:crc_errors↑ → SW:packet_loss↑
-    for sw in _SW_LIST:
+    # ── INTERFACE_FLAP injection (per access switch) ──────────────────────
+    for sw in sws:
+        safe_end = max(n_steps - 60, 50)
+        if safe_end <= 50:
+            break
         for _ in range(n_events_if):
-            start    = int(rng.integers(50, n_steps - 60))
-            duration = int(rng.integers(12, 28))
-            ramp     = np.linspace(0, 1, duration // 2)
-            wave     = np.concatenate([ramp, np.ones(duration - len(ramp))])
+            start    = int(rng.integers(50, safe_end))
+            duration = int(rng.integers(12, min(28, n_steps - start - 5)))
+            wave     = _make_wave(duration)
+            _inj((sw, "link_util"),   start + 0, wave, 40,  100)
+            _inj((sw, "buffer_util"), start + 1, wave, 45,  100)
+            _inj((sw, "crc_errors"),  start + 2, wave, 200, 500)
+            _inj((sw, "packet_loss"), start + 3, wave,   6,  10)
 
-            def _inj2(key, offset, amp, hi):
-                if key not in base_series:
-                    return
-                s  = base_series[key]
-                i0 = min(start + offset, n_steps - 1)
-                i1 = min(i0 + duration, n_steps)
-                w  = wave[:i1 - i0]
-                s[i0:i1] = np.clip(s[i0:i1] + amp * w, 0, hi)
-
-            _inj2((sw, "link_util"),   0, 40, 100)
-            _inj2((sw, "buffer_util"), 1, 45, 100)
-            _inj2((sw, "crc_errors"),  2, 200, 500)
-            _inj2((sw, "packet_loss"), 3, 6, 10)
-
-    # ── Assemble DataFrame (vectorised, float32) ──────────────────────────
+    # ── Assemble DataFrame ────────────────────────────────────────────────
     chunks: List[pd.DataFrame] = []
     for (dev, met), series in base_series.items():
         chunks.append(pd.DataFrame({
@@ -264,14 +312,24 @@ def generate_dataset(
             "value":     series.astype(np.float32),
         }))
 
-    df = pd.concat(chunks, ignore_index=True)
-    return df
+    return pd.concat(chunks, ignore_index=True)
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# Quick self-test
+# ════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("Generating 100-device / 30-day dataset...")
-    df = generate_dataset()
-    print(f"Shape: {df.shape}")
-    print(f"Devices: {df['device'].nunique()}")
-    print(f"Metrics: {df['metric'].nunique()}")
-    print(df.head(10))
+    import time
+    print(f"{'N':>5}  {'router':>6}  {'ds':>4}  {'fw':>4}  {'sw':>4}  "
+          f"{'edge':>5}  {'rows':>10}  {'time':>6}")
+    print("-" * 60)
+    for n in [5, 10, 20, 50, 100]:
+        t0     = time.time()
+        counts = _tier_counts(n)
+        df     = generate_dataset(n_devices=n, n_days=10)
+        print(f"{n:>5}  "
+              f"{counts['router']:>6}  {counts['dist_switch']:>4}  "
+              f"{counts['firewall']:>4}  {counts['access_switch']:>4}  "
+              f"{counts['edge_switch']:>5}  "
+              f"{len(df):>10,}  {time.time()-t0:>5.1f}s")
