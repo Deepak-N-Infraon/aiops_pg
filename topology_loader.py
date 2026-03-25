@@ -86,7 +86,7 @@ class TopologyLoader:
         """Return the list of nodes on the shortest path src → dst."""
         if src == dst:
             return [src]
-        visited: Set[str] = {src}
+        visited: Set[str]            = {src}
         queue   = deque([(src, [src])])
         while queue:
             node, path = queue.popleft()

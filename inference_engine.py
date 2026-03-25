@@ -62,11 +62,12 @@ class PatternMatchResult:
 @dataclass
 class InferenceState:
     """Per-pattern rolling state for persistence filtering."""
-    pattern_id:     str
-    consecutive:    int = 0     # consecutive windows where condition was met
-    last_score:     float = 0.0
-    history:        List[float] = field(default_factory=list)
-
+    pattern_id:       str
+    consecutive:      int = 0
+    last_score:       float = 0.0
+    history:          List[float] = field(default_factory=list)
+    # Records when each step last fired: {step_num: wall_clock_minutes}
+    step_fire_times:  Dict[int, float] = field(default_factory=dict)
 
 # ════════════════════════════════════════════════════════════════════════════
 # InferenceEngine
@@ -194,45 +195,51 @@ class InferenceEngine:
 
     def _eval_pattern(
         self,
-        pattern:  dict,
-        features: Dict[Tuple[str, str], MetricFeatures],
-        window_ts: str,
+        pattern:          dict,
+        features:         Dict[Tuple[str, str], MetricFeatures],
+        window_ts:        str,
+        window_time_min:  float,
     ) -> PatternMatchResult:
-        """Evaluate all steps of one pattern and return a match result."""
+        """Evaluate all steps using real cross-window lag timing."""
         pid        = pattern["pattern_id"]
         conf       = pattern["stats"]["confidence"]
         steps      = pattern["sequence"]
         total      = len(steps)
         severity   = pattern["result_event"]["severity"]
         event_name = pattern["result_event"]["name"]
+        state      = self._state[pid]
 
         step_results: List[StepResult] = []
         matched = 0
-        last_matched_ts = None
 
-        # Use a pseudo-timestamp per step based on lag spec (minutes from now)
+        # Snapshot BEFORE this window so lag checks use prior-window fire times,
+        # not times recorded during THIS window's evaluation.
+        fire_snap = dict(state.step_fire_times)
+
         for i, step_spec in enumerate(steps):
-            # For lag validation: use the lag_minutes as relative offset
+            step_num = step_spec["step"]
+
+            # Lag check uses the snapshot (previous-window fire times only)
             if i == 0:
-                step_ts = 0.0
+                prev_fire_ts = None
             else:
-                step_ts = step_spec["lag_minutes"]
+                prev_step_num = steps[i - 1]["step"]
+                prev_fire_ts = fire_snap.get(prev_step_num)
 
             sr = self._eval_step(
-                step_spec   = step_spec,
-                features    = features,
-                prev_step_ts= last_matched_ts,
-                current_ts  = step_ts,
+                step_spec    = step_spec,
+                features     = features,
+                prev_step_ts = prev_fire_ts,
+                current_ts   = window_time_min,
             )
             step_results.append(sr)
 
             if sr.matched:
                 matched += 1
-                last_matched_ts = step_ts
-            else:
-                # For partial matching, don't hard-stop — continue evaluating
-                # later steps to show partial progress
-                pass
+                # Only record the FIRST time a step fires — don't overwrite.
+                # This preserves the original fire timestamp for future lag checks.
+                if step_num not in state.step_fire_times:
+                    state.step_fire_times[step_num] = window_time_min
 
         score         = (matched / total) * conf
         final_step_ok = step_results[-1].matched if step_results else False
@@ -290,20 +297,26 @@ class InferenceEngine:
 
     def process_window(
         self,
-        features:  Dict[Tuple[str, str], MetricFeatures],
-        window_ts: Optional[str] = None,
+        features:        Dict[Tuple[str, str], MetricFeatures],
+        window_ts:       Optional[str] = None,
+        window_time_min: Optional[float] = None,
     ) -> List[PatternMatchResult]:
         """
         Process one feature window against all active patterns.
+        window_time_min: wall-clock time in minutes (used for lag tracking).
+                         If None, defaults to current Unix time / 60.
         Returns list of PatternMatchResult (one per pattern).
         """
+        import time as _time
         if window_ts is None:
             window_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        if window_time_min is None:
+            window_time_min = _time.time() / 60.0
 
         results: List[PatternMatchResult] = []
 
         for pattern in self.patterns:
-            r = self._eval_pattern(pattern, features, window_ts)
+            r = self._eval_pattern(pattern, features, window_ts, window_time_min)
             r = self._apply_persistence(r)
             results.append(r)
 

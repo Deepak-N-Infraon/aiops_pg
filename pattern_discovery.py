@@ -457,16 +457,20 @@ class PatternDiscovery:
 
     def _chain_to_pattern(
         self,
-        chain:        List[CausalLink],
-        target_event: str,
-        severity:     str,
-        support:      int,
-        confidence:   float,
-        lift:         float,
-        windows:      List[Dict[Tuple[str, str], MetricFeatures]],
+        chain:         List[CausalLink],
+        target_event:  str,
+        severity:      str,
+        support:       int,
+        confidence:    float,
+        lift:          float,
+        windows:       List[Dict[Tuple[str, str], MetricFeatures]],
+        event_windows: List[bool],
     ) -> PatternSpec:
         """Convert a validated CausalLink chain into a PatternSpec."""
 
+        # Use only windows where the target event is active so that
+        # absolute_range covers real event-peak values, not just baseline.
+        event_wins = [w for w, ev in zip(windows, event_windows) if ev] or windows
         steps: List[PatternStep] = []
         cum_lag = 0.0
 
@@ -475,10 +479,10 @@ class PatternDiscovery:
             if idx == 0:
                 # root cause node
                 feat_vals = [w[(lk.dev_a, lk.metric_a)].slope
-                             for w in windows
+                             for w in event_wins
                              if (lk.dev_a, lk.metric_a) in w]
                 abs_vals  = [w[(lk.dev_a, lk.metric_a)].last
-                             for w in windows
+                             for w in event_wins
                              if (lk.dev_a, lk.metric_a) in w]
                 steps.append(PatternStep(
                     step      = idx + 1,
@@ -487,11 +491,11 @@ class PatternDiscovery:
                     metric    = lk.metric_a,
                     feature   = "slope",
                     direction = "up" if np.median(feat_vals) > 0 else "down",
-                    threshold = float(np.percentile(np.abs(feat_vals), 25)),
-                    absolute_min = float(np.percentile(abs_vals, 10)) if abs_vals else 0.0,
-                    absolute_max = float(np.percentile(abs_vals, 90)) if abs_vals else 100.0,
+                    threshold = float(np.percentile(np.abs(feat_vals), 10)) if feat_vals else 0.01,
+                    absolute_min = float(np.percentile(abs_vals,  2)) if abs_vals else 0.0,
+                    absolute_max = float(np.percentile(abs_vals, 99.5)) if abs_vals else 1e6,
                     lag_minutes      = 0.0,
-                    tolerance_minutes= 1.0,
+                    tolerance_minutes= 5.0,
                 ))
                 cum_lag = 0.0
 
@@ -499,10 +503,10 @@ class PatternDiscovery:
             feat_name = "delta" if lk.metric_b in ("crc_errors","packet_loss","queue_depth") else "slope"
             feat_vals = [getattr(w[(lk.dev_b, lk.metric_b)], "delta"
                                  if feat_name == "delta" else "slope")
-                         for w in windows
+                         for w in event_wins
                          if (lk.dev_b, lk.metric_b) in w]
             abs_vals  = [w[(lk.dev_b, lk.metric_b)].last
-                         for w in windows
+                         for w in event_wins
                          if (lk.dev_b, lk.metric_b) in w]
             cum_lag += lk.best_lag_min
 
@@ -513,11 +517,11 @@ class PatternDiscovery:
                 metric    = lk.metric_b,
                 feature   = feat_name,
                 direction = "up" if lk.correlation > 0 else "down",
-                threshold = float(np.percentile(np.abs(feat_vals), 25)) if feat_vals else 0.1,
-                absolute_min = float(np.percentile(abs_vals, 10)) if abs_vals else 0.0,
-                absolute_max = float(np.percentile(abs_vals, 90)) if abs_vals else 100.0,
+                threshold = float(np.percentile(np.abs(feat_vals), 10)) if feat_vals else 0.01,
+                absolute_min = float(np.percentile(abs_vals,  2)) if abs_vals else 0.0,
+                absolute_max = float(np.percentile(abs_vals, 99.5)) if abs_vals else 1e6,
                 lag_minutes      = round(cum_lag, 1),
-                tolerance_minutes= 2.0,
+                tolerance_minutes= 5.0,
             ))
 
         roles = list({self.topo.get_role(lk.dev_a) for lk in chain}
@@ -632,7 +636,7 @@ class PatternDiscovery:
                         conf >= self.min_confidence and
                         lift >= self.min_lift):
                     pat = self._chain_to_pattern(
-                        chain, t_event, t_sev, sup, conf, lift, windows
+                        chain, t_event, t_sev, sup, conf, lift, windows, event_windows
                     )
                     validated.append((lift, conf, pat))
 
