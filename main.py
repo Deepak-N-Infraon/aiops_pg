@@ -5,9 +5,11 @@ End-to-end demonstration:
   PHASE 1 — Training:  data generation → features → pattern discovery → storage
   PHASE 2 — Inference: simulate 6 progressive polling windows → alerts
   PHASE 3 — Rediscovery: run on fresh data → drift update
+
+Scaled to 100 devices / 30 days with parallel optimisations.
 """
 
-import os, sys, json
+import os, sys, json, time
 sys.path.insert(0, os.path.dirname(__file__))
 
 import pandas as pd
@@ -22,10 +24,6 @@ from inference_engine  import InferenceEngine
 from rediscovery_engine import RediscoveryEngine
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ════════════════════════════════════════════════════════════════════════════
-
 SEP = "─" * 68
 
 
@@ -35,38 +33,57 @@ def banner(title: str) -> None:
     print(f"{'═'*68}")
 
 
+def _elapsed(t0: float) -> str:
+    s = time.time() - t0
+    return f"{s:.1f}s" if s < 60 else f"{s/60:.1f}min"
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PHASE 1 — TRAINING
 # ════════════════════════════════════════════════════════════════════════════
 
 def phase_training():
-    banner("PHASE 1 — TRAINING")
+    banner("PHASE 1 — TRAINING  [100 devices / 30 days]")
+    t_phase = time.time()
 
     # 1a. Generate dataset
-    print("\n[1/6] Generating synthetic dataset (10 days, 5-min polls)...")
-    df   = generate_dataset(n_days=10, freq_min=5, seed=42)
+    print("\n[1/6] Generating synthetic dataset (100 devices, 30 days, 5-min polls)...")
+    t0 = time.time()
+    df   = generate_dataset(n_days=30, freq_min=5, seed=42)
     topo = load_topology(get_topology())
-
+    print(f"      Done in {_elapsed(t0)}")
     print(f"      Rows: {len(df):,}  |  "
           f"Devices: {df['device'].nunique()}  |  "
           f"Metrics: {df['metric'].nunique()}")
-    print(f"\n      Devices: {sorted(df['device'].unique())}")
-    print(f"      Metrics: {sorted(df['metric'].unique())}")
+    print(f"\n      Device roles:")
+    for role in ["router", "dist_switch", "firewall", "access_switch", "edge_switch"]:
+        devs = sorted({n['id'] for n in get_topology()['nodes'] if n['role'] == role})
+        print(f"        {role:20s}: {len(devs)} devices  "
+              f"({', '.join(devs[:4])}{'...' if len(devs)>4 else ''})")
 
     # 1b. Topology summary
-    print(f"\n[2/6] Topology:\n{topo.summary()}")
+    print(f"\n[2/6] Topology:\n{topo.summary()[:500]}...")   # truncate for 100 devices
 
-    # 1c. Feature extraction — show one window in detail
-    print(f"\n[3/6] Feature extraction (window=75min, step=5min)...")
-    fe      = FeatureEngine(window_minutes=75, step_minutes=5)
+    # 1c. Feature extraction — parallel
+    print(f"\n[3/6] Feature extraction (window=75min, step=5min, parallel)...")
+    t0 = time.time()
+    fe = FeatureEngine(
+        window_minutes = 75,
+        step_minutes   = 5,
+        n_workers      = None,   # auto-detect CPUs
+        batch_size     = 300,
+    )
     windows = fe.compute_all_windows(df)
-    print(f"      Total windows computed: {len(windows)}")
+    print(f"      Done in {_elapsed(t0)} — {len(windows)} windows")
 
-    print("\n  ── Sample features from window #50 ──")
-    print_feature_table(windows[50])
+    print("\n  ── Sample features from window #100 ──")
+    # Only print a subset of devices to avoid wall of text
+    sample = {k: v for k, v in list(windows[100].items())[:12]}
+    print_feature_table(sample)
 
-    # 1d. Pattern discovery
-    print(f"\n[4/6] Running pattern discovery...")
+    # 1d. Pattern discovery — parallel
+    print(f"\n[4/6] Running pattern discovery (parallel workers)...")
+    t0 = time.time()
     discoverer = PatternDiscovery(
         topo           = topo,
         min_support    = 0.03,
@@ -75,12 +92,15 @@ def phase_training():
         max_hops       = 3,
         max_lag_min    = 35.0,
         min_corr       = 0.40,
+        n_workers      = None,   # auto
+        batch_size     = 400,
         verbose        = True,
     )
     target_events = get_target_events()
     patterns = discoverer.discover(
         df=df, target_events=target_events, windows=windows
     )
+    print(f"      Discovery done in {_elapsed(t0)}")
 
     # 1e. Pattern storage
     print(f"\n[5/6] Saving patterns to storage...")
@@ -88,11 +108,12 @@ def phase_training():
     store.add_patterns(patterns)
     print(store.summary())
 
-    # 1f. Print full JSON for first discovered pattern
+    # 1f. Print full JSON for first pattern
     if patterns:
         print(f"\n[6/6] Full JSON for top pattern ({patterns[0].pattern_id}):")
         print(json.dumps(patterns[0].to_json(), indent=2))
 
+    print(f"\n  Total training time: {_elapsed(t_phase)}")
     return df, topo, store, windows
 
 
@@ -115,25 +136,22 @@ def phase_inference(df: pd.DataFrame, store: PatternStorage):
         verbose             = True,
     )
 
-    fe = FeatureEngine(window_minutes=75, step_minutes=5)
+    fe = FeatureEngine(window_minutes=75, step_minutes=5, n_workers=1)
 
     print(f"\n  Simulating 6 progressive polling windows during a HIGH_LATENCY event...\n")
     print(f"  Pattern used:  {active_patterns[0]['pattern_id']}")
     print(f"  Target event:  {active_patterns[0]['result_event']['name']}")
     print(f"  Total steps:   {len(active_patterns[0]['sequence'])}")
 
-    # Find a HIGH_LATENCY window by looking for elevated FW1:latency_ms
     key = ("FW1", "latency_ms")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df_sorted = df.sort_values("timestamp")
 
-    # Find peak timestamp
     peak_mask = (df["device"] == "FW1") & (df["metric"] == "latency_ms")
     peak_ts   = df[peak_mask]["value"].idxmax()
     peak_time = df.loc[peak_ts, "timestamp"]
 
-    # Simulate 6 windows leading UP to the peak
-    offsets_min = [-60, -45, -30, -20, -10, 0]   # T-60 to T-0
+    offsets_min = [-60, -45, -30, -20, -10, 0]
 
     for poll_num, offset in enumerate(offsets_min, 1):
         sim_now   = peak_time + pd.Timedelta(minutes=offset)
@@ -141,19 +159,15 @@ def phase_inference(df: pd.DataFrame, store: PatternStorage):
         mask      = (df_sorted["timestamp"] >= sim_start) & \
                     (df_sorted["timestamp"] <= sim_now)
         window_df = df_sorted[mask]
-
         if window_df.empty:
             continue
 
         features = fe.compute_latest_window(window_df)
         ts_label = f"T{offset:+d}min  [{sim_now.strftime('%Y-%m-%d %H:%M')}]"
+        results  = engine.process_window(features, window_ts=ts_label)
 
-        results = engine.process_window(features, window_ts=ts_label)
-
-        # Print explanation
         engine.explain(results, ts_label=ts_label)
 
-        # Progressive score table
         print(f"\n  ── Progressive prediction score table ──")
         print(f"  {'Poll':>4}  {'Pattern':35s}  "
               f"{'Matched':>8}  {'Score':>7}  {'Level':>8}")
@@ -163,8 +177,7 @@ def phase_inference(df: pd.DataFrame, store: PatternStorage):
                   f"{r.matched_steps}/{r.total_steps}  "
                   f"{r.prediction_score:7.4f}  {r.alert_level:>8}")
 
-        # Detailed step breakdown
-        print(f"\n  ── Why score changed (step-by-step explainability) ──")
+        print(f"\n  ── Why score changed ──")
         for r in results[:1]:
             prev_matched = getattr(engine, "_prev_matched", 0)
             cur_matched  = r.matched_steps
@@ -195,7 +208,7 @@ def phase_rediscovery(df: pd.DataFrame, topo, store: PatternStorage):
 
     print("\n  Simulating a 24-hour rediscovery cycle on the second half of data...")
 
-    mid = len(df) // 2
+    mid       = len(df) // 2
     recent_df = df.iloc[mid:].copy()
 
     engine = RediscoveryEngine(
@@ -226,7 +239,7 @@ def phase_rediscovery(df: pd.DataFrame, topo, store: PatternStorage):
 if __name__ == "__main__":
     print("\n" + "█"*68)
     print("  Network AIOps — Topology-Aware Pattern Discovery & Inference")
-    print("  Production-Grade · Fully Explainable · No Black-Box ML")
+    print("  100 Devices · 30 Days · Fully Explainable · No Black-Box ML")
     print("█"*68)
 
     df, topo, store, windows = phase_training()
